@@ -1,0 +1,647 @@
+library(readxl)
+
+data <- read_excel("Plotdata.xlsx",sheet = 2)
+str(data)
+library(coxme)
+
+####Generates a distance matrix####
+geodetic <- function(l1, t1, l2, t2) 
+{
+  l1 <- l1 / 360.0 * 2.0 * pi
+  l2 <- l2 / 360.0 * 2.0 * pi
+  t1 <- t1 / 360.0 * 2.0 * pi
+  t2 <- t2 / 360.0 * 2.0 * pi
+  
+  dist <- 6371.0 * acos( sin(t1) * sin(t2) + cos(t1) * cos(t2) * cos(l2 - l1) )
+  
+  return(dist)
+}
+
+
+dist.mat <- function(lat, lon, rwnms) {
+  n <- length( lat )
+  mat <- matrix(0, n, n )
+  
+  for(i in 1:n) {
+    for( j in 1:n) {
+      mat[i, j] <- geodetic( lon[i], lat[i], lon[j], lat[j] )
+      if( is.na( mat[i,j]) == TRUE ) mat[i,j] <- 0    # Nasty
+    }
+  }
+  
+  mdist <- geodetic(-90,-90, 90,90)
+  mat <- mdist - mat
+  diag(mat) <- mdist
+  mat <- mat / mdist
+  rownames(mat) <- rwnms
+  return(mat)
+  
+}
+
+distanceMatrix1 <- dist.mat( data$LAT, data$LON,
+                             data$Site) 
+diag( distanceMatrix1 ) <- diag(distanceMatrix1) + 0.01
+distanceMatrix1 <- distanceMatrix1 / 1.01
+colnames(distanceMatrix1) <- c(1:nrow(distanceMatrix1))
+
+
+data <- read_excel("Plotdata.xlsx",sheet = 1)
+data$Site<-as.character(data$Site)
+data$Plot<-as.character(data$Plot)
+data$CWMLT<-as.numeric(data$CWMLT)
+data$CWMHn<-as.numeric(data$CWMHn)
+data$STN<-as.numeric(data$STN)
+data$CWMarea<-as.numeric(data$CWMarea)
+data$Pielou<-as.numeric(data$Pielou)
+
+#### Figure 2a ####
+library(performance)
+library(brms)
+lm0<-lm(scale(PL)~scale(MAT)+
+          scale(MAP)+
+          scale(STN)+
+          scale(SR)+
+          scale(CWMHn)+
+          scale(CWMLT)+
+          scale(Pielou)+
+          scale(CWMarea),
+        data = data)
+
+check_collinearity(lm0)
+
+
+nm0<-brm(scale(PL)~scale(MAT)+
+           scale(MAP)+
+           scale(STN)+
+           scale(SR)+
+           scale(Pielou)+
+           scale(CWMarea)+
+           scale(CWMHn)+
+           scale(CWMLT)+(1|Site),
+         data = data,
+         cov_ranef = list(Site=distanceMatrix1))
+summary(nm0)
+saveRDS(nm0, "nm0.rds")
+PL_null<-readRDS("nm0.rds")
+
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(tidybayes)
+p2a<-PL_null%>%
+  spread_draws(b_scaleMAT, 
+               b_scaleMAP, 
+               b_scaleSTN,
+               b_scaleSR,
+               b_scalePielou,
+               b_scaleCWMarea,
+               b_scaleCWMHn,
+               b_scaleCWMLT) %>%
+  rename("MAT"=b_scaleMAT, 
+         "MAP" =b_scaleMAP,
+         "STN"=b_scaleSTN,  
+         "SR"=b_scaleSR, 
+         "Pielou" = b_scalePielou,
+         "CWMleafarea"= b_scaleCWMarea,
+         "CWMheight"= b_scaleCWMHn,
+         "CWMthickness"=b_scaleCWMLT)%>%
+  gather(key="variabe", value="estimates",
+         "MAT",  "MAP","STN",
+         "SR", "Pielou","CWMleafarea","CWMheight", 
+         "CWMthickness") %>%
+  mutate(variabe = fct_relevel(variabe, 
+                               "CWMthickness",
+                               "CWMheight",
+                               "CWMleafarea",
+                               "Pielou",
+                               "SR",
+                               "STN",
+                               "MAP",
+                               "MAT" ))%>%
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c( "skyblue","gray80"))+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Estimates") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red")
+
+
+#### Figure 2b ####
+lm1<-lm(scale(SpeciesTurnoverEffects)~scale(MAT)+
+          scale(MAP)+
+          scale(STN)+
+          scale(SR)+
+          scale(CWMHn)+
+          scale(CWMLT)+
+          scale(Pielou)+
+          scale(CWMarea),
+        data = data)
+check_collinearity(lm1)
+
+nm1<-brm(scale(SpeciesTurnoverEffects)~scale(MAT)+
+           scale(MAP)+
+           scale(STN)+
+           scale(SR)+
+           scale(Pielou)+
+           scale(CWMarea)+
+           scale(CWMHn)+
+           scale(CWMLT)+(1|Site),
+         data = data,
+         cov_ranef = list(Site=distanceMatrix1))
+saveRDS(nm1, "nm1.rds")
+SpeciesTurnoverEffects_null<-readRDS("nm1.rds")
+
+p2b<-SpeciesTurnoverEffects_null%>%
+  spread_draws(b_scaleMAT, 
+               b_scaleMAP, 
+               b_scaleSTN,
+               b_scaleSR,
+               b_scalePielou,
+               b_scaleCWMarea,
+               b_scaleCWMHn,
+               b_scaleCWMLT) %>%
+  rename("MAT"=b_scaleMAT, 
+         "MAP" =b_scaleMAP, 
+         "STN"=b_scaleSTN,
+         "SR"=b_scaleSR, 
+         "Pielou" = b_scalePielou,
+         "CWMleafarea"= b_scaleCWMarea,
+         "CWMheight"= b_scaleCWMHn,
+         "CWMthickness"=b_scaleCWMLT)%>%
+  gather(key="variabe", value="estimates",
+         "MAT",  "MAP",
+         "STN","SR", "Pielou","CWMleafarea","CWMheight", 
+         "CWMthickness") %>%
+  mutate(variabe = fct_relevel(variabe, 
+                               "CWMthickness",
+                               "CWMheight",
+                               "CWMleafarea",
+                               "Pielou",
+                               "SR",
+                               "STN",
+                               "MAP",
+                               "MAT" ))%>%
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c( "skyblue","gray80"))+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Estimates") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red")
+
+
+#### Figure 2c####
+lm2<-lm(scale(IntraspecificVariation)~scale(MAT)+
+          scale(MAP)+
+          scale(STN)+
+          scale(SR)+
+          scale(Pielou)+
+          scale(CWMarea)+
+          scale(CWMHn)+
+          scale(CWMLT),
+        data = data)
+check_collinearity(lm2)
+
+nm2<-brm(scale(IntraspecificVariation)~scale(MAT)+
+           scale(MAP)+
+           scale(STN)+
+           scale(SR)+
+           scale(Pielou)+
+           scale(CWMarea)+
+           scale(CWMHn)+
+           scale(CWMLT)+(1|Site),
+         data = data,
+         cov_ranef = list(Site=distanceMatrix1))
+
+saveRDS(nm2, "nm2.rds")
+IntraspecificVariation_null<-readRDS("nm2.rds")
+
+p2c<-IntraspecificVariation_null%>%
+  spread_draws(b_scaleMAT, 
+               b_scaleMAP, 
+               b_scaleSTN,
+               b_scaleSR,
+               b_scalePielou,
+               b_scaleCWMarea,
+               b_scaleCWMHn,
+               b_scaleCWMLT) %>%
+  rename("MAT"=b_scaleMAT, 
+         "MAP" =b_scaleMAP,
+         "STN"=b_scaleSTN,  
+         "SR"=b_scaleSR, 
+         "Pielou" = b_scalePielou,
+         "CWMleafarea"= b_scaleCWMarea,
+         "CWMheight"= b_scaleCWMHn,
+         "CWMthickness"=b_scaleCWMLT)%>%
+  gather(key="variabe", value="estimates",
+         "MAT",  "MAP","STN",
+         "SR", "Pielou","CWMleafarea","CWMheight", 
+         "CWMthickness") %>%
+  mutate(variabe = fct_relevel(variabe, 
+                               "CWMthickness",
+                               "CWMheight",
+                               "CWMleafarea",
+                               "Pielou",
+                               "SR",
+                               "STN",
+                               "MAP",
+                               "MAT" ))%>%
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c( "skyblue","gray80"))+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Estimates") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red") 
+
+#### the relative contribution of different factors ####
+dv_model<-"
+data {
+  int<lower=1> N;  // total number of observations
+  vector[N] Y;  // response variable
+  int<lower=1> K;  // number of population-level effects
+  matrix[N, K] X;  // population-level design matrix
+  // data for group-level effects of ID 1
+  int<lower=1> N_1;  // number of grouping levels
+  int<lower=1> M_1;  // number of coefficients per level
+  int<lower=1> J_1[N];  // grouping indicator per observation
+  matrix[N_1, N_1] Lcov_1;  // cholesky factor of known covariance matrix
+  // group-level predictor values
+  vector[N] Z_1_1;
+  int prior_only;  // should the likelihood be ignored?
+}
+transformed data {
+  int Kc = K - 1;
+  matrix[N, Kc] Xc;  // centered version of X without an intercept
+  vector[Kc] means_X;  // column means of X before centering
+  for (i in 2:K) {
+    means_X[i - 1] = mean(X[, i]);
+    Xc[, i - 1] = X[, i] - means_X[i - 1];
+  }
+}
+parameters {
+  vector[Kc] b;  // population-level effects
+  real Intercept;  // temporary intercept for centered predictors
+  real<lower=0> sigma;  // residual SD
+  vector<lower=0>[M_1] sd_1;  // group-level standard deviations
+  vector[N_1] z_1[M_1];  // standardized group-level effects
+}
+transformed parameters {
+  vector[N_1] r_1_1= (sd_1[1] * (Lcov_1 * z_1[1]));  // actual group-level effects
+  vector[N] mu = Intercept + rep_vector(0.0, N);
+    for (n in 1:N) {
+      // add more terms to the linear predictor
+      mu[n] += r_1_1[J_1[n]] * Z_1_1[n];
+    }
+}
+model {
+  // likelihood including constants
+  if (!prior_only) {
+    // initialize linear predictor term
+    target += normal_id_glm_lpdf(Y | Xc, mu, b, sigma);
+  }
+  // priors including constants
+  target += student_t_lpdf(Intercept | 3, -2.8, 2.5);
+  target += student_t_lpdf(sigma | 3, 0, 2.5)
+    - 1 * student_t_lccdf(0 | 3, 0, 2.5);
+  target += student_t_lpdf(sd_1 | 3, 0, 2.5)
+    - 1 * student_t_lccdf(0 | 3, 0, 2.5);
+  target += std_normal_lpdf(z_1[1]);
+}
+generated quantities {
+  // actual population-level intercept
+  real b_Intercept = Intercept - dot_product(means_X, b);
+  real sd_MAT;
+  real sd_MAP;
+  real sd_STN;
+  real sd_SR;
+  real sd_Pielou;
+  real sd_CWMarea;
+  real sd_CWMHn;
+  real sd_CWMLT;
+  real sd_Site;
+  real sd_error;
+  real p_MAT;
+  real p_MAP;
+  real p_STN;
+  real p_SR;
+  real p_Pielou;
+  real p_CWMarea;
+  real p_CWMHn;
+  real p_CWMLT;
+  real p_Site;
+  real p_error;
+  vector[N] e_y;
+  vector[N] est_Site;
+  
+  
+  e_y=Y-mu-Xc*b;
+  sd_MAT=fabs(b[1]);
+  sd_MAP=fabs(b[2]);
+  sd_STN=fabs(b[3]);
+  sd_SR=fabs(b[4]);
+  sd_Pielou=fabs(b[5]);
+  sd_CWMarea=fabs(b[6]);
+  sd_CWMHn=fabs(b[7]);
+  sd_CWMLT=fabs(b[8]);
+  sd_error=sd(e_y);
+  
+   for (n in 1:N) {
+      // add more terms to the linear predictor
+      est_Site[n]=r_1_1[J_1[n]] * Z_1_1[n];
+    } 
+  
+  sd_Site=sd(est_Site);
+  
+p_MAT=sd_MAT/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_MAP=sd_MAP/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_STN=sd_STN/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_SR=sd_SR/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ + sd_Site+sd_error)*100;
+
+p_Pielou=sd_Pielou/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_CWMarea=sd_CWMarea/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_CWMHn=sd_CWMHn/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_CWMLT=sd_CWMLT/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_Site= sd_Site/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+
+p_error=sd_error/(sd_MAT+sd_MAP+ sd_STN +sd_SR+sd_Pielou+ sd_CWMarea +sd_CWMHn+ sd_CWMLT+ sd_Site+sd_error)*100;
+}"
+
+library(rstan)
+dv_data<-make_standata(scale(PL)~scale(MAT)+
+                         scale(MAP)+
+                         scale(STN)+
+                         scale(SR)+
+                         scale(Pielou)+
+                         scale(CWMarea)+  
+                         scale(CWMHn)+
+                         scale(CWMLT)+(1|Site),
+                       data = data,
+                       cov_ranef = list(Site=distanceMatrix1),
+                       control = list(adapt_delta = 0.9, max_treedepth=12))
+
+PL <- stan(model_code=dv_model, data =dv_data, iter =10000, chains = 4,control = list(adapt_delta = 0.9, max_treedepth=12))
+saveRDS(PL,"PL.rds")
+PL<-readRDS("PL.rds")
+
+library(Matrix)
+library(tidyverse)
+library(tidybayes)
+####Fig 2d####
+p2d<-PL %>%
+  posterior_samples(pars=c(  
+    'p_MAT', 
+    'p_MAP',
+    'p_STN',
+    'p_SR',
+    'p_Pielou',
+    'p_CWMarea',
+    'p_CWMHn',
+    'p_CWMLT',
+    'p_Site',
+    'p_error'
+  )) %>%
+  dplyr::rename("Temperature"=p_MAT, 
+                "Precipitation" = p_MAP,   
+                "Soil total nitrogen"= p_STN,
+                'Species richness'= p_SR,
+                'Pielou'= p_Pielou,
+                'Leaf size'= p_CWMarea,
+                'Plant height'=p_CWMHn,
+                'Leaf thickness'=p_CWMLT,
+                "Spatial distance"=p_Site,
+                "Error"=p_error,
+  ) %>%
+  
+  gather(key="variabe", value="estimates",
+         "Temperature",  "Precipitation",
+         "Soil total nitrogen", "Species richness", 'Pielou','Leaf size','Plant height','Leaf thickness',"Spatial distance","Error"
+  ) %>%mutate(variabe = fct_relevel(variabe, 
+                                    "Error",
+                                    "Spatial distance",
+                                    "Leaf thickness",
+                                    "Plant height",
+                                    "Leaf size",
+                                    'Pielou',
+                                    "Species richness",
+                                    "Soil total nitrogen",
+                                    "Precipitation",
+                                    "Temperature")) %>%
+  
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c("gray80", "skyblue"))+
+  ###scale_fill_manual(values = c( "skyblue"))+
+  ###geom_pointinterval()+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Contribution to pathogen load variation (%)") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red")
+
+
+dv_data1<-make_standata(scale(SpeciesTurnoverEffects)~scale(MAT)+
+                          scale(MAP)+
+                          scale(STN)+
+                          scale(SR)+
+                          scale(Pielou)+
+                          scale(CWMarea)+  
+                          scale(CWMHn)+
+                          scale(CWMLT)+(1|Site),
+                        data = data,
+                        cov_ranef = list(Site=distanceMatrix1),
+                        control = list(adapt_delta = 0.9, max_treedepth=12))
+
+
+SpeciesTurnoverEffects <- stan(model_code=dv_model, data =dv_data1, iter =10000, chains = 4,
+                               control = list(adapt_delta = 0.9, max_treedepth=12))
+saveRDS(SpeciesTurnoverEffects,"SpeciesTurnoverEffects.rds")
+SpeciesTurnoverEffects<-readRDS("SpeciesTurnoverEffects.rds")
+
+
+####Fig 2e####
+p2e<-SpeciesTurnoverEffects %>%
+  posterior_samples(pars=c(  
+    'p_MAT', 
+    'p_MAP',
+    'p_STN',
+    'p_SR',
+    'p_Pielou',
+    'p_CWMarea',
+    'p_CWMHn',
+    'p_CWMLT',
+    'p_Site',
+    'p_error'
+  )) %>%
+  dplyr::rename("Temperature"=p_MAT, 
+                "Precipitation" = p_MAP,   
+                "Soil total nitrogen"= p_STN,
+                'Species richness'= p_SR,
+                'Pielou'= p_Pielou,
+                'Leaf size'= p_CWMarea,
+                'Plant height'=p_CWMHn,
+                'Leaf thickness'=p_CWMLT,
+                "Spatial distance"=p_Site,
+                "Error"=p_error,
+  ) %>%
+  
+  gather(key="variabe", value="estimates",
+         "Temperature",  "Precipitation",
+         "Soil total nitrogen", "Species richness", 'Pielou','Leaf size','Plant height','Leaf thickness',
+         "Spatial distance","Error"
+  ) %>%mutate(variabe = fct_relevel(variabe, 
+                                    "Error",
+                                    "Spatial distance",
+                                    "Leaf thickness",
+                                    "Plant height",
+                                    "Leaf size",
+                                    'Pielou',
+                                    "Species richness",
+                                    "Soil total nitrogen",
+                                    "Precipitation",
+                                    "Temperature")) %>%
+  
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c("gray80", "skyblue"))+
+  ###scale_fill_manual(values = c( "skyblue"))+
+  ###geom_pointinterval()+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Contribution to species turnover effects variation (%)") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red")
+
+
+dv_data2<-make_standata(scale(IntraspecificVariation)~scale(MAT)+
+                          scale(MAP)+
+                          scale(STN)+
+                          scale(SR)+
+                          scale(Pielou)+
+                          scale(CWMarea)+  
+                          scale(CWMHn)+
+                          scale(CWMLT)+(1|Site),
+                        data = data,
+                        cov_ranef = list(Site=distanceMatrix1),
+                        control = list(adapt_delta = 0.9, max_treedepth=12))
+
+
+IntraspecificVariation <- stan(model_code=dv_model, data =dv_data2, iter =10000, chains = 4,
+                               control = list(adapt_delta = 0.9, max_treedepth=12))
+saveRDS(IntraspecificVariation,"IntraspecificVariation.rds")
+IntraspecificVariation<-readRDS("IntraspecificVariation.rds")
+
+
+####Fig 2f####
+p2f<-IntraspecificVariation %>%
+  posterior_samples(pars=c(  
+    'p_MAT', 
+    'p_MAP',
+    'p_STN',
+    'p_SR',
+    'p_Pielou',
+    'p_CWMarea',
+    'p_CWMHn',
+    'p_CWMLT',
+    'p_Site',
+    'p_error'
+  )) %>%
+  dplyr::rename("Temperature"=p_MAT, 
+                "Precipitation" = p_MAP,   
+                "Soil total nitrogen"= p_STN,
+                'Species richness'= p_SR,
+                'Pielou'= p_Pielou,
+                'Leaf size'= p_CWMarea,
+                'Plant height'=p_CWMHn,
+                'Leaf thickness'=p_CWMLT,
+                "Spatial distance"=p_Site,
+                "Error"=p_error,
+  ) %>%
+  
+  gather(key="variabe", value="estimates",
+         "Temperature",  "Precipitation",
+         "Soil total nitrogen", "Species richness", 'Pielou','Leaf size','Plant height','Leaf thickness',"Spatial distance","Error"
+  ) %>%mutate(variabe = fct_relevel(variabe, 
+                                    "Error",
+                                    "Spatial distance",
+                                    "Leaf thickness",
+                                    "Plant height",
+                                    "Leaf size",
+                                    'Pielou',
+                                    "Species richness",
+                                    "Soil total nitrogen",
+                                    "Precipitation",
+                                    "Temperature")) %>%
+  
+  ggplot(aes(y = variabe, x = estimates,
+             fill = stat(x< 0 ),
+  )) +
+  scale_fill_manual(values = c("gray80", "skyblue"))+
+  ###scale_fill_manual(values = c( "skyblue"))+
+  ###geom_pointinterval()+
+  stat_halfeye()+
+  ylab("") +
+  xlab("Contribution to intraspecific variation effects variation (%)") +
+  theme_bw()+
+  theme(axis.text=element_text(size=12,face="bold"),
+        axis.title=element_text(size=12,face="bold"))+
+  theme(strip.text.x = element_text(size =12),
+        legend.position='none')+
+  geom_vline(xintercept=0,linetype="dashed",color="red")
+
+
+#### SEM model ####
+m0<-bf(scale(SpeciesTurnoverEffects)~scale(MAT)+scale(MAP)+scale(SR)+scale(CWMHn)+scale(CWMLT)+scale(STN)+scale(CWMarea)+scale(Pielou)+(1|Site))
+m1<-bf(scale(IntraspecificVariation)~scale(MAT)+scale(MAP)+scale(SR)+scale(CWMHn)+scale(CWMLT)+scale(STN)+scale(CWMarea)+scale(Pielou)+(1|Site))
+m2<-bf(scale(SR)~scale(STN)+scale(MAT)+scale(MAP)+(1|Site))
+m3<-bf(scale(Pielou)~scale(STN)+scale(MAT)+scale(MAP)+(1|Site))
+m4<-bf(scale(CWMLT)~scale(STN)+scale(MAT)+scale(MAP)+(1|Site))
+m5<-bf(scale(CWMHn)~scale(STN)+scale(MAT)+scale(MAP)+(1|Site))
+m6<-bf(scale(STN)~scale(MAT)+scale(MAP)+(1|Site))
+m7<-bf(scale(CWMarea)~scale(STN)+scale(MAT)+scale(MAP)+(1|Site))
+SEM<-brm(m0 + m1 + m2 + m3+m4+m5+m6+m7+ set_rescor(FALSE),
+         control = list(adapt_delta = 0.9,max_treedepth = 12),
+         iter =10000,
+         data = data,
+         cov_ranef = list(Site=distanceMatrix1))
+
+saveRDS(SEM, "SEM.rds")
+
+SEM<-readRDS("SEM.rds")
+summary(SEM)
