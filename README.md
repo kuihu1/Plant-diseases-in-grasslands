@@ -1,2 +1,2 @@
 # Plant-diseases-in-grasslands
-Climate underlies variation in disease severity via shifts plant community characteristics in grasslands
+Climate underlies variation in plant disease severity by altering grassland plant communities
